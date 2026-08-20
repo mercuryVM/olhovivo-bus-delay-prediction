@@ -1,0 +1,22 @@
+-r requirements.txt
+
+# Clustering / features (KMeans, DBSCAN, HDBSCAN nativo do sklearn >= 1.3)
+scikit-learn>=1.5
+scipy>=1.13
+
+# Modelos preditivos
+xgboost>=2.1
+
+# LSTM / GNN (CPU). Instale o torch primeiro:
+#   pip install torch --index-url https://download.pytorch.org/whl/cpu
+torch>=2.4
+torch-geometric>=2.6
+
+# Geoespacial opcional — se não instalar, o projeto usa o fallback interno
+pyproj>=3.6
+shapely>=2.0
+h3>=4.1
+
+# Visualização
+matplotlib>=3.9
+folium>=0.17

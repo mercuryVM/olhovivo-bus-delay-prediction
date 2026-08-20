@@ -1,0 +1,14 @@
+# Núcleo da coleta (tudo instala com pip puro no Windows, sem compilador)
+requests>=2.32
+PyYAML>=6.0
+python-dotenv>=1.0
+numpy>=1.26
+pandas>=2.2
+pyarrow>=17.0
+duckdb>=1.1
+
+# Fuso America/Sao_Paulo (o Windows nao traz a base IANA)
+tzdata>=2024.1
+
+# MongoDB geoespacial (2dsphere + time series)
+pymongo>=4.8
