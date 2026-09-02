@@ -1,0 +1,159 @@
+# ---------------------------------------------------------------------------
+# Configuração da coleta Olho Vivo (SPTrans)
+# Tudo aqui pode ser sobrescrito por variável de ambiente OLHOVIVO_<SECAO>_<CHAVE>
+# ---------------------------------------------------------------------------
+
+api:
+  base_url: "https://api.olhovivo.sptrans.com.br/v2.1"
+  # se o certificado da SPTrans falhar, o cliente cai para http automaticamente
+  permitir_fallback_http: true
+  timeout_s: 25
+  max_tentativas: 5
+  backoff_base_s: 1.5
+  # teto de cortesia: intervalo mínimo entre requisições (segundos)
+  intervalo_minimo_s: 0.12
+
+coleta:
+  duracao_dias: 7
+  # janela diária em America/Sao_Paulo. "00:00" -> "23:59" = 24 h de coleta.
+  # A operação da SPTrans praticamente para entre 01h e 04h; coletar nesse
+  # intervalo só gera linhas vazias, mas manter 24 h permite medir a madrugada.
+  janela_inicio: "04:00"
+  janela_fim: "01:00"
+
+  posicoes:
+    # "todas"       -> GET /Posicao  (1 chamada, ~12-15 mil veículos)
+    # "monitoradas" -> GET /Posicao/Linha por linha monitorada
+    modo: "todas"
+    intervalo_s: 30
+
+  previsoes:
+    # GET /Previsao/Linha por linha monitorada: devolve, de uma vez, a previsão
+    # de todos os veículos para todas as paradas daquela linha/sentido.
+    intervalo_s: 60
+    workers: 4
+
+  linhas:
+    # Letreiros a monitorar. Os dois sentidos são resolvidos automaticamente
+    # (cada sentido tem um código de linha "cl" próprio).
+    # Lista inicial: troncais de alta demanda + corredores. Ajuste à vontade.
+    letreiros:
+      # Selecao baseada em medicao, nao em chute.
+      # Criterio: cobertura de previsao >= 40% do itinerario do GTFS, >= 12
+      # paradas com previsao e frota >= 5 veiculos. Reproduza com:
+      #     python -m olhovivo linhas-candidatas
+      - "3459"    # 75-78 paradas, cobertura 82-87% — a melhor da amostra
+      - "6000"    # 41 paradas, 80%, frota de 32
+      - "6913"    # 33 paradas, 72%
+      - "8400"    # 26 paradas, 79%
+      - "6091"    # 28 paradas, 44%
+      - "8594"    # 25 paradas, 42%
+      - "6450"    # 22 paradas, 69%
+      - "6500"    # 14 paradas, 64%
+      - "4310"    # 16 paradas, 49%
+      - "5300"    # 12 paradas, 40%
+    # true = monitora TODAS as linhas do catálogo. Cuidado: ~2.900 códigos de
+    # linha, o ciclo de previsão não fecha em 60 s. Use com intervalo >= 600 s.
+    incluir_todas: false
+    # alternativa: monitorar todas as linhas que passam por estes corredores
+    corredores: []
+
+armazenamento:
+  # backends ativos. "parquet" é o arquivo local à prova de queda;
+  # "mongo" é o store geoespacial consultável.
+  backends: ["parquet", "mongo"]
+  raiz: "dados"
+  # a cada quantos segundos / linhas o buffer vira arquivo Parquet fechado.
+  # 120 s = no pior caso (queda seca) perde-se ate 2 min de coleta.
+  rotacao_s: 120
+  rotacao_linhas: 250000
+
+mongo:
+  # série temporal nativa do MongoDB 5.0+ para posições e previsões
+  usar_timeseries: true
+  # granularidade: "seconds" | "minutes" | "hours"
+  granularidade: "seconds"
+  # expira dados brutos depois de N dias (0 = nunca expira)
+  ttl_dias_brutos: 0
+  lote_insercao: 5000
+
+geo:
+  # SIRGAS 2000 / UTM 23S — projeção métrica oficial para São Paulo.
+  # Usada só se pyproj estiver instalado; senão o fallback interno é equivalente
+  # na escala da RMSP (erro relativo < 0,1 %).
+  epsg_metrico: 31983
+  ancora_lat: -23.5505
+  ancora_lon: -46.6333
+  # resolução H3 9 ~ 174 m de aresta; 8 ~ 461 m
+  h3_resolucao: 9
+
+chegadas:
+  # fonte do traçado: "gtfs" usa o shapes.txt da SPTrans e cai para a
+  # inferência por trajetória quando a linha não casa; "observado" ignora o
+  # GTFS e sempre infere o itinerário dos próprios dados coletados.
+  fonte_tracado: "gtfs"
+
+  # distância máxima parada <-> traçado para a parada ser considerada atendida.
+  # O cadastro de paradas de SP tem erro da mesma ordem: há linhas em que só
+  # 1/3 das paradas fica a menos de 50 m do shape. Paradas acima do limite são
+  # descartadas (com registro), porque a abscissa delas seria inventada.
+  dist_max_parada_tracado_m: 120
+
+  # amostra de GPS mais distante que isto do traçado é descartada antes da
+  # segmentação. Pega o caso dominante de lixo em SP: ônibus na garagem com o
+  # AVL ligado e o deslocamento garagem -> ponto inicial.
+  dist_max_amostra_m: 150
+
+  # raio de aceitação da chegada (distância mínima observada ao ponto)
+  raio_chegada_m: 90
+
+  # acima destes saltos entre as duas amostras usadas na interpolação, a
+  # confiança do evento cai proporcionalmente
+  salto_max_interp_m: 500
+  salto_max_interp_s: 120
+  # acima destes, o evento é descartado de vez (interpolação sem sentido)
+  salto_hard_m: 1200
+  salto_hard_s: 300
+
+  # nova viagem quando o veículo some por mais que isto
+  gap_viagem_s: 900
+  # nova viagem quando a abscissa curvilínea retrocede mais que isto
+  retrocesso_viagem_m: 1500
+  # mesmo limite que a SPTrans/ANTP usa para marcar registro AVL inválido
+  velocidade_max_kmh: 80
+
+gtfs:
+  url: "https://www.sptrans.com.br/umbraco/Surface/PerfilDesenvolvedor/BaixarGTFS"
+  # raio para casar cp (Olho Vivo) com stop_id (GTFS) quando o código não bate
+  raio_casamento_parada_m: 80
+
+casamento:
+  # horizonte máximo entre a previsão e a chegada real para casar o par
+  horizonte_max_s: 3600
+  # tolerância para trás (a previsão pode ter sido feita logo após a chegada)
+  tolerancia_passado_s: 60
+  # erro absoluto acima disso é descartado como casamento espúrio
+  erro_max_abs_s: 2700
+
+atraso:
+  # Definição do estudo: desvio entre o tempo de percurso observado num trecho
+  # e o tempo de referência do mesmo trecho, sentido e faixa horária.
+  #
+  # Formulação binária: "atrasado" quando o desvio supera este percentual sobre
+  # o tempo de referência. 0.20 = 20 % acima do típico.
+  limiar_percentual: 0.20
+  # mínimo de observações para a mediana do trecho valer como referência
+  min_amostras_referencia: 5
+
+regioes:
+  # ST-DBSCAN
+  eps_espacial_m: 400
+  eps_temporal_s: 1800
+  min_pontos: 15
+  # DBSCAN puramente espacial
+  dbscan_eps_m: 300
+  dbscan_min_amostras: 20
+  # HDBSCAN
+  hdbscan_min_cluster: 25
+  # K-means
+  kmeans_k: 12
