@@ -6,8 +6,10 @@ impactadas.
 
 Trabalho de Sistemas de Informação — EACH/USP.
 
-- [`docs/DICIONARIO-DE-DADOS.md`](docs/DICIONARIO-DE-DADOS.md) — documentação do
-  conjunto de dados: variáveis, formalização das medidas e limitações.
+- [`docs/DICIONARIO-DE-DADOS.md`](docs/DICIONARIO-DE-DADOS.md) — descrição do
+  conjunto de dados de saída: linhas, principais colunas e limitações.
+- [`docs/apendice-metodologico.md`](docs/apendice-metodologico.md) — detalhamento
+  do método e referências.
 
 ---
 
