@@ -61,7 +61,7 @@ class MongoStore:
             uri,
             serverSelectionTimeoutMS=8000,
             tz_aware=True,
-            appname="triaxis-olhovivo",
+            appname="olhovivo-each",
         )
         # falha rapido se o servidor nao responder
         self.cliente.admin.command("ping")

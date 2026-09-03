@@ -72,7 +72,7 @@ import requests
 log = logging.getLogger("olhovivo.api")
 
 BASE_PADRAO = "https://api.olhovivo.sptrans.com.br/v2.1"
-UA = "triaxis-olhovivo/1.0 (pesquisa academica; coleta de atraso de onibus)"
+UA = "olhovivo-each/1.0 (pesquisa academica; coleta de atraso de onibus)"
 
 
 class OlhoVivoError(RuntimeError):
