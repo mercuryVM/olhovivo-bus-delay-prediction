@@ -219,8 +219,26 @@ def rodar_st_dbscan(
 def _vizinhanca_espaco_tempo(
     x: np.ndarray, y: np.ndarray, t: np.ndarray, eps_s: float, eps_t: float
 ) -> list[np.ndarray]:
-    """Lista de vizinhos dentro do cilindro (raio espacial x janela temporal)."""
+    """
+    Lista de vizinhos dentro do cilindro (raio espacial x janela temporal).
+
+    ATENCAO ao custo de memoria. Materializar a vizinhanca de todos os pontos
+    custa O(n x d), com d o numero medio de vizinhos. Num raio de 400 m sobre
+    area urbana densa, d chega facil a milhares, e a lista explode: uma execucao
+    com 867 mil eventos consumiu mais de 24 GiB e foi morta pelo sistema.
+
+    Por isso `executar` limita o numero de amostras antes de chegar aqui. Acima
+    de ~50 mil pontos, use `modo="agregado"`, que reduz a dezenas de milhares
+    agregando por parada — e que e a unidade certa para "regiao impactada", de
+    todo modo.
+    """
     n = len(x)
+    if n > 120_000:
+        raise MemoryError(
+            f"{n:,} pontos e demais para materializar a vizinhanca do ST-DBSCAN. "
+            "Use modo='agregado' ou reduza regioes.max_amostras."
+        )
+
     try:
         from scipy.spatial import cKDTree
 
@@ -374,6 +392,28 @@ def executar(
     amostras = preparar_amostras(df, proj, modo=modo, limiar_atraso_s=limiar_atraso_s)
     if amostras.empty:
         raise RuntimeError("nenhuma amostra apos o filtro de atraso")
+
+    # Guarda de memoria. O DBSCAN do sklearn calcula TODAS as vizinhancas de uma
+    # vez; num raio de centenas de metros sobre area urbana densa isso e O(n x d)
+    # com d na casa dos milhares. Uma semana de coleta gera milhoes de eventos, e
+    # sem este corte o processo e morto por falta de memoria.
+    max_amostras = int(cfg.get("regioes.max_amostras", 50_000))
+    if len(amostras) > max_amostras:
+        if modo == "eventos":
+            log.warning(
+                "%d eventos excedem o teto de %d; amostrando aleatoriamente. "
+                "Para usar tudo, rode com modo='agregado' (uma amostra por parada).",
+                len(amostras),
+                max_amostras,
+            )
+            amostras = amostras.sample(
+                n=max_amostras, random_state=42
+            ).reset_index(drop=True)
+        else:
+            raise RuntimeError(
+                f"{len(amostras)} amostras agregadas excedem o teto de {max_amostras}; "
+                "aumente regioes.max_amostras se houver memoria disponivel"
+            )
 
     log.info("agrupando %d amostras (modo=%s)", len(amostras), modo)
     resultados: dict[str, Any] = {}

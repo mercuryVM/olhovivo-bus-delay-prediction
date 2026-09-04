@@ -146,6 +146,12 @@ atraso:
   min_amostras_referencia: 5
 
 regioes:
+  # Teto de amostras no agrupamento. O DBSCAN calcula todas as vizinhanças de
+  # uma vez: com raio de centenas de metros em área densa isso é O(n x d), e
+  # milhões de eventos estouram a memória. Acima do teto, o modo "eventos"
+  # sorteia uma amostra; o modo "agregado" (uma linha por parada) não chega perto.
+  max_amostras: 50000
+
   # ST-DBSCAN
   eps_espacial_m: 400
   eps_temporal_s: 1800
