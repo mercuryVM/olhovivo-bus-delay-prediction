@@ -313,6 +313,20 @@ class Armazenamento:
         self.backends = list(backends if backends is not None else cfg.backends)
         self.eventos = RegistroEventos(self.raiz)
 
+        # Gravar os fatos BRUTOS no Mongo e caro e, na pratica, inutil: nenhuma
+        # consulta do projeto le `posicoes`/`previsoes` de la — a analise inteira
+        # roda sobre o Parquet. Em 7 dias sao ~120 milhoes de documentos, cada
+        # posicao atualizando tres indices, incluindo um 2dsphere sobre 100 M de
+        # pontos. Da ordem de dezenas de GB de escrita amplificada, disputando
+        # disco e cache com quem mais usar aquele servidor.
+        #
+        # As tabelas DERIVADAS (chegadas, percursos, previsao_realizado, regioes,
+        # paradas) continuam indo para o Mongo: essas sim sao consultadas, e sao
+        # ordens de grandeza menores.
+        self.brutos_no_mongo = bool(cfg.get("mongo.brutos", False))
+        self.duckdb_memoria = str(cfg.get("armazenamento.duckdb_memoria", "4GB"))
+        self.duckdb_threads = int(cfg.get("armazenamento.duckdb_threads", 4))
+
         self._escritores: dict[str, EscritorParquet] = {}
         self.mongo = None
 
@@ -346,7 +360,7 @@ class Armazenamento:
             return
         if "parquet" in self.backends:
             self._escritor("posicoes").adicionar(linhas)
-        if self.mongo:
+        if self.mongo and self.brutos_no_mongo:
             self.mongo.inserir_posicoes(linhas)
 
     def escrever_previsoes(self, linhas: Sequence[dict]) -> None:
@@ -354,10 +368,38 @@ class Armazenamento:
             return
         if "parquet" in self.backends:
             self._escritor("previsoes").adicionar(linhas)
-        if self.mongo:
+        if self.mongo and self.brutos_no_mongo:
             self.mongo.inserir_previsoes(linhas)
 
     # -- derivados -----------------------------------------------------------
+    def salvar_tabela_df(self, nome: str, df) -> Path | None:
+        """
+        Grava uma tabela derivada a partir de um DataFrame, sem passar por dicts.
+
+        `salvar_tabela` recebe `list[dict]`, o que obriga quem chama a fazer
+        `df.to_dict("records")` — e isso e caro de um jeito que nao aparece ate
+        a escala real: medido em ~1,2 KB de RAM por registro, ou seja ~6 GB para
+        os 5 milhoes de pares de uma semana, so para o pyarrow reconverter tudo
+        de volta. Com o dict do Mongo vivo ao mesmo tempo, o pico passa de 13 GB
+        e o processo morre.
+
+        `pa.Table.from_pandas` faz a mesma coisa em ~0,4 us por linha, sem criar
+        um unico dict. `safe=False` porque o esquema usa timestamp em ms e o
+        frame vem em ns — o caminho antigo truncava igual, so que em silencio.
+        """
+        if df is None or not len(df):
+            return None
+        destino_dir = self.raiz / "derivado"
+        destino_dir.mkdir(parents=True, exist_ok=True)
+        destino = destino_dir / f"{nome}.parquet"
+        temp = destino.with_suffix(".parquet.part")
+        tabela = pa.Table.from_pandas(
+            df, schema=ESQUEMAS.get(nome), preserve_index=False, safe=False
+        )
+        pq.write_table(tabela, temp, compression="zstd")
+        os.replace(temp, destino)
+        return destino
+
     def salvar_tabela(self, nome: str, linhas: Sequence[dict]) -> Path | None:
         """Grava uma tabela derivada inteira (chegadas, previsao_realizado)."""
         if not linhas:
@@ -427,7 +469,14 @@ class Armazenamento:
             onde.append(f"({filtro_extra})")
         clausula = (" WHERE " + " AND ".join(onde)) if onde else ""
 
+        # Sem limite explicito, o DuckDB dimensiona pelo HOST: memory_limit vira
+        # 80% da RAM fisica da maquina (dezenas de GB) e threads vira o total de
+        # cores. Num contêiner com cgroup menor, ele estoura o limite antes de
+        # decidir fazer spill em disco — e num node compartilhado, abre dezenas
+        # de threads que so disputam I/O com os vizinhos.
         con = duckdb.connect()
+        con.execute(f"SET memory_limit='{self.duckdb_memoria}'")
+        con.execute(f"SET threads={self.duckdb_threads}")
         try:
             return con.execute(
                 f"SELECT {cols} FROM read_parquet('{padrao}', union_by_name=true)"

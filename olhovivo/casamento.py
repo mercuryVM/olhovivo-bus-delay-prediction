@@ -145,6 +145,14 @@ def executar(
         t_chegada=chegadas["t_chegada"].astype(NS),
     ).sort_values("t_chegada")
 
+    # A celula depende so de (lat, lon), que vem da CHEGADA. Calcular aqui, nas
+    # ~176 mil chegadas, em vez de depois do join nos ~5 milhoes de pares: sao
+    # 28x menos chamadas para exatamente o mesmo resultado.
+    dir_["celula"] = [
+        geo.celula(float(a), float(b), resolucao_h3)
+        for a, b in zip(dir_["lat"], dir_["lon"])
+    ]
+
     log.info(
         "casando %d previsoes com %d chegadas (confianca >= %.2f)",
         len(esq),
@@ -166,6 +174,7 @@ def executar(
                 "headway_obs_s",
                 "lat",
                 "lon",
+                "celula",
             ]
         ],
         left_on="chave_tempo",
@@ -202,12 +211,13 @@ def executar(
     local = pares["t_chegada"].dt.tz_convert(TZ_SP)
     pares["dia_semana"] = local.dt.dayofweek.astype("int8")
     pares["hora"] = local.dt.hour.astype("int8")
-    pares["faixa"] = [faixa_horaria(h) for h in pares["hora"]]
+    pares["faixa"] = pd.cut(
+        pares["hora"],
+        bins=[f[0] for f in FAIXAS] + [24],
+        right=False,
+        labels=[f[2] for f in FAIXAS],
+    ).astype(str)
     pares["erro_abs_s"] = pares["erro_s"].abs()
-    pares["celula"] = [
-        geo.celula(float(a), float(b), resolucao_h3)
-        for a, b in zip(pares["lat"], pares["lon"])
-    ]
 
     saida = pares[
         [
@@ -240,21 +250,22 @@ def executar(
     saida["sentido"] = saida["sentido"].fillna(0).astype("int8")
     saida["confianca"] = saida["confianca"].astype("float32")
 
-    registros = saida.to_dict("records")
-    arm.salvar_tabela("previsao_realizado", registros)
+    # grava direto do DataFrame: `to_dict("records")` em 5 M de linhas custa
+    # ~6 GB de RAM so para o pyarrow reconverter tudo de volta
+    arm.salvar_tabela_df("previsao_realizado", saida)
 
     if arm.mongo:
-        docs = [
-            {
-                **r,
-                "loc": geo.ponto_geojson(r["lat"], r["lon"]),
-                "ts_coleta": r["ts_coleta"].to_pydatetime(),
-                "t_previsto": r["t_previsto"].to_pydatetime(),
-                "t_chegada": r["t_chegada"].to_pydatetime(),
-            }
-            for r in registros
-        ]
-        arm.mongo.substituir_colecao("previsao_realizado", docs)
+        # gerador, nao lista: os documentos sao consumidos em lotes e nao
+        # coexistem todos em memoria com o DataFrame
+        def _docs():
+            for r in saida.itertuples(index=False):
+                d = r._asdict()
+                d["loc"] = geo.ponto_geojson(d["lat"], d["lon"])
+                for campo in ("ts_coleta", "t_previsto", "t_chegada"):
+                    d[campo] = d[campo].to_pydatetime()
+                yield d
+
+        arm.mongo.substituir_colecao("previsao_realizado", _docs())
 
     resumo = {
         "previsoes_avaliadas": total_bruto,

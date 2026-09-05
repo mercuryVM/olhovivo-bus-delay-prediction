@@ -14,11 +14,14 @@ simples e robusto: o instante em que `s(t)` cruza `s_k`.
 
 from __future__ import annotations
 
+import logging
 import math
 from dataclasses import dataclass
 from typing import Iterable, Sequence
 
 import numpy as np
+
+log = logging.getLogger("olhovivo.geo")
 
 RAIO_TERRA_M = 6371008.8
 
@@ -256,24 +259,46 @@ def densificar(xs, ys, passo_m: float = 25.0):
 
 
 # ------------------------------------------------------------------- celulas
+def _resolver_h3():
+    """
+    Resolve a funcao do H3 UMA vez, na importacao do modulo.
+
+    Nao coloque o `import h3` dentro de `celula()`. O Python nao cacheia import
+    que FALHA: cada chamada revarre o `sys.path` inteiro com `stat()` no disco.
+    Medido nesta base: 1.061 us por chamada, contra ~0,5 us quando resolvido
+    aqui. Em 5 milhoes de chamadas isso e a diferenca entre 2,5 segundos e 88
+    minutos — e o custo nao e so tempo, sao centenas de milhoes de syscalls
+    batendo no disco, que despejam o page cache de quem divide o array.
+    """
+    try:
+        import h3
+    except ImportError:
+        log.warning(
+            "h3 nao instalado: usando grade regular para as celulas. "
+            "As celulas continuam validas para agregacao, mas nao sao "
+            "hexagonos H3. Instale com: pip install h3"
+        )
+        return None
+    return getattr(h3, "latlng_to_cell", None) or getattr(h3, "geo_to_h3", None)
+
+
+_PROJ_PADRAO = ProjecaoLocal()
+_CELULA_H3 = _resolver_h3()
+_ARESTA_GRADE = {7: 1220.0, 8: 461.0, 9: 174.0, 10: 66.0}
+
+
 def celula(lat: float, lon: float, resolucao: int = 9) -> str:
     """
     Identificador de celula para agregacao regional.
 
-    Usa H3 se disponivel (hexagonos, sem distorcao de area), senao cai numa
-    grade regular equivalente em metros — o suficiente para agrupar hotspots.
+    Usa H3 quando disponivel (hexagonos, sem distorcao de area); senao cai numa
+    grade regular equivalente em metros — suficiente para agrupar hotspots.
     """
-    try:
-        import h3
-
-        if hasattr(h3, "latlng_to_cell"):  # h3 >= 4
-            return h3.latlng_to_cell(lat, lon, resolucao)
-        return h3.geo_to_h3(lat, lon, resolucao)  # h3 3.x
-    except Exception:
-        aresta = {7: 1220.0, 8: 461.0, 9: 174.0, 10: 66.0}.get(resolucao, 174.0)
-        proj = _PROJ_PADRAO
-        x, y = proj.para_xy(lat, lon)
-        return f"g{resolucao}_{int(float(x) // aresta)}_{int(float(y) // aresta)}"
+    if _CELULA_H3 is not None:
+        return _CELULA_H3(lat, lon, resolucao)
+    aresta = _ARESTA_GRADE.get(resolucao, 174.0)
+    x, y = _PROJ_PADRAO.para_xy(lat, lon)
+    return f"g{resolucao}_{int(float(x) // aresta)}_{int(float(y) // aresta)}"
 
 
 def celulas(lats, lons, resolucao: int = 9) -> list[str]:
@@ -304,7 +329,6 @@ def centro_celula(cel: str) -> tuple[float, float] | None:
         return None
 
 
-_PROJ_PADRAO = ProjecaoLocal()
 
 
 # ------------------------------------------------------------------- geojson

@@ -68,6 +68,11 @@ armazenamento:
   rotacao_s: 120
   rotacao_linhas: 250000
 
+  # Limites do DuckDB na leitura. Sem isso ele dimensiona pela máquina inteira
+  # e ignora o limite do contêiner — estoura antes de fazer spill em disco.
+  duckdb_memoria: "4GB"
+  duckdb_threads: 4
+
 mongo:
   # série temporal nativa do MongoDB 5.0+ para posições e previsões
   usar_timeseries: true

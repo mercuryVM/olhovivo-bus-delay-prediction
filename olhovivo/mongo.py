@@ -71,6 +71,7 @@ class MongoStore:
         self.granularidade = cfg.get("mongo.granularidade", "seconds")
         self.lote = int(cfg.get("mongo.lote_insercao", 5000))
         self.ttl_dias = int(cfg.get("mongo.ttl_dias_brutos", 0))
+        self.brutos = bool(cfg.get("mongo.brutos", False))
 
         self._buf_pos: list[dict] = []
         self._buf_prev: list[dict] = []
@@ -107,19 +108,21 @@ class MongoStore:
         )
         self.db[COL_LINHA_PARADA].create_index([("cp", ASCENDING)])
 
-        # -- fatos brutos
-        self.db[COL_POSICOES].create_index([("meta.cl", ASCENDING), ("ta", ASCENDING)])
-        self.db[COL_POSICOES].create_index(
-            [("meta.prefixo", ASCENDING), ("ta", ASCENDING)]
-        )
-        self._tentar_geo(COL_POSICOES, "loc")
-
-        self.db[COL_PREVISOES].create_index(
-            [("meta.cl", ASCENDING), ("ts_coleta", ASCENDING)]
-        )
-        self.db[COL_PREVISOES].create_index(
-            [("meta.cp", ASCENDING), ("ts_coleta", ASCENDING)]
-        )
+        # -- fatos brutos (so quando eles sao mesmo gravados aqui)
+        if not self.brutos:
+            log.info("mongo.brutos=false: posicoes/previsoes ficam so no Parquet")
+        else:
+            self.db[COL_POSICOES].create_index([("meta.cl", ASCENDING), ("ta", ASCENDING)])
+            self.db[COL_POSICOES].create_index(
+                [("meta.prefixo", ASCENDING), ("ta", ASCENDING)]
+            )
+            self._tentar_geo(COL_POSICOES, "loc")
+            self.db[COL_PREVISOES].create_index(
+                [("meta.cl", ASCENDING), ("ts_coleta", ASCENDING)]
+            )
+            self.db[COL_PREVISOES].create_index(
+                [("meta.cp", ASCENDING), ("ts_coleta", ASCENDING)]
+            )
 
         # -- derivados
         self.db[COL_CHEGADAS].create_index([("loc", GEOSPHERE)], name="loc_2dsphere")
@@ -345,16 +348,27 @@ class MongoStore:
         return (res.upserted_count or 0) + (res.modified_count or 0)
 
     # ------------------------------------------------------------- derivados
-    def substituir_colecao(self, nome: str, docs: Sequence[dict], geo_campo: str | None = "loc") -> int:
-        """Regrava uma tabela derivada inteira (chegadas, previsao_realizado)."""
+    def substituir_colecao(
+        self, nome: str, docs: Iterable[dict], geo_campo: str | None = "loc"
+    ) -> int:
+        """
+        Regrava uma tabela derivada inteira (chegadas, previsao_realizado).
+
+        Aceita ITERAVEL, nao lista: com milhoes de documentos, materializar tudo
+        antes de inserir dobra o pico de memoria sem nenhum ganho.
+        """
+        import itertools
+
         col = self.db[nome]
         col.delete_many({})
+        fluxo = iter(docs)
         total = 0
-        for i in range(0, len(docs), self.lote):
-            fatia = docs[i : i + self.lote]
-            if fatia:
-                col.insert_many(fatia, ordered=False)
-                total += len(fatia)
+        while True:
+            fatia = list(itertools.islice(fluxo, self.lote))
+            if not fatia:
+                break
+            col.insert_many(fatia, ordered=False)
+            total += len(fatia)
         return total
 
     # -------------------------------------------------------------- consultas
@@ -446,27 +460,34 @@ class MongoStore:
         )
 
     def cobertura_coleta(self) -> dict:
-        """Quanto de dado bruto ja entrou, e em que janela."""
+        """
+        Quanto de dado bruto ja entrou, e em que janela.
+
+        NAO use `$group` sem `$match` aqui. A versao anterior fazia isso e virava
+        COLLSCAN completo sobre ~100 M de posicoes e ~20 M de previsoes — em
+        colecao de serie temporal, obrigando a descomprimir todos os buckets.
+        Sao ~25-30 GB puxados pelo cache do WiredTiger a cada chamada, e este e
+        justamente o comando que se roda varias vezes por dia acompanhando a
+        coleta. Contagem vem dos metadados; extremos vem de dois IXSCAN de uma
+        linha cada sobre o timeField.
+        """
         def _resumo(colecao: str, campo: str) -> dict:
-            doc = next(
-                iter(
-                    self.db[colecao].aggregate(
-                        [
-                            {
-                                "$group": {
-                                    "_id": None,
-                                    "n": {"$sum": 1},
-                                    "inicio": {"$min": f"${campo}"},
-                                    "fim": {"$max": f"${campo}"},
-                                }
-                            }
-                        ]
-                    )
-                ),
-                {},
-            )
-            doc.pop("_id", None)
-            return doc
+            col = self.db[colecao]
+            try:
+                primeiro = next(
+                    iter(col.find({}, {campo: 1}).sort(campo, 1).limit(1)), {}
+                )
+                ultimo = next(
+                    iter(col.find({}, {campo: 1}).sort(campo, -1).limit(1)), {}
+                )
+            except Exception as exc:
+                log.warning("nao consegui ler a janela de %s: %s", colecao, exc)
+                primeiro = ultimo = {}
+            return {
+                "n": col.estimated_document_count(),
+                "inicio": primeiro.get(campo),
+                "fim": ultimo.get(campo),
+            }
 
         return {
             "posicoes": _resumo(COL_POSICOES, "ta"),
