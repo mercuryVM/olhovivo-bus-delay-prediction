@@ -456,15 +456,47 @@ def processar(
     vinculos_atualizados: list[dict] = []
     diagnostico: dict[int, Any] = {}
 
+    # UMA leitura para todas as linhas, e nao uma por linha.
+    #
+    # A versao anterior chamava `ler_bruto` dentro do laco, com filtro por `cl`.
+    # Cada chamada varria o dataset inteiro: com 29 linhas eram 58 varreduras,
+    # ~44 GB lidos para processar 775 MB. Isso nao gera pressao de memoria nem
+    # de disco visivel no node, mas despeja o page cache do array a cada passada
+    # — e quem divide o disco (um banco de producao, por exemplo) sente.
+    lista_cl = ",".join(str(int(c)) for c in alvos)
+    log.info("lendo posicoes de %d linhas numa varredura", len(alvos))
+    todas_posicoes = arm.ler_bruto(
+        "posicoes",
+        inicio=inicio,
+        fim=fim,
+        colunas=["ts_coleta", "cl", "prefixo", "ta", "lat", "lon"],
+        filtro_extra=f"cl IN ({lista_cl})",
+    )
+    por_linha = (
+        {int(k): v for k, v in todas_posicoes.groupby("cl", sort=False)}
+        if len(todas_posicoes)
+        else {}
+    )
+    del todas_posicoes
+
+    log.info("lendo previsoes de %d linhas numa varredura", len(alvos))
+    todas_previsoes = arm.ler_bruto(
+        "previsoes",
+        inicio=inicio,
+        fim=fim,
+        colunas=["cl", "cp", "parada_lat", "parada_lon"],
+        filtro_extra=f"cl IN ({lista_cl})",
+    )
+    previsoes_por_linha = (
+        {int(k): v for k, v in todas_previsoes.groupby("cl", sort=False)}
+        if len(todas_previsoes)
+        else {}
+    )
+    del todas_previsoes
+
     for n, cl in enumerate(alvos, 1):
-        posicoes = arm.ler_bruto(
-            "posicoes",
-            inicio=inicio,
-            fim=fim,
-            colunas=["ts_coleta", "cl", "prefixo", "ta", "lat", "lon"],
-            filtro_extra=f"cl = {cl}",
-        )
-        if posicoes.empty:
+        posicoes = por_linha.get(int(cl))
+        if posicoes is None or posicoes.empty:
             continue
         posicoes = posicoes.dropna(subset=["ta", "lat", "lon"])
         posicoes["ta"] = pd.to_datetime(posicoes["ta"], utc=True)
@@ -477,14 +509,8 @@ def processar(
         # so mostra os pontos com veiculo se aproximando naquele instante, mas a
         # uniao de uma semana de snapshots cobre a linha inteira. Sem isto,
         # perde-se chegada em parada que o catalogo nao pegou no dia da sincronia.
-        observadas = arm.ler_bruto(
-            "previsoes",
-            inicio=inicio,
-            fim=fim,
-            colunas=["cp", "parada_lat", "parada_lon"],
-            filtro_extra=f"cl = {cl}",
-        )
-        if len(observadas):
+        observadas = previsoes_por_linha.get(int(cl))
+        if observadas is not None and len(observadas):
             observadas = (
                 observadas.dropna(subset=["parada_lat", "parada_lon"])
                 .drop_duplicates(subset=["cp"])
