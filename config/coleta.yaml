@@ -168,3 +168,11 @@ regioes:
   hdbscan_min_cluster: 25
   # K-means
   kmeans_k: 12
+
+  # Parâmetros do modo "agregado" (uma amostra por parada). Os de cima foram
+  # pensados para eventos: exigir 20 pontos num raio de 300 m, com paradas a
+  # ~400 m umas das outras, não forma cluster nenhum.
+  min_amostras_parada: 20
+  agregado_dbscan_eps_m: 800
+  agregado_dbscan_min: 3
+  agregado_hdbscan_min_cluster: 5

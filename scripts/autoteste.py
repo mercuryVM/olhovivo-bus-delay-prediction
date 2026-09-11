@@ -477,6 +477,7 @@ def teste_analise(cfg, arm) -> None:
         algoritmos=("kmeans", "dbscan", "hdbscan", "st-dbscan"),
         modo="eventos",
         limiar_atraso_s=300,
+        fonte="previsao",
     )
     com_erro = [a for a, r in resultado.items() if isinstance(r, dict) and "erro" in r]
     checar(not com_erro, "os 4 algoritmos rodaram sem erro", ", ".join(com_erro))

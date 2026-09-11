@@ -581,6 +581,7 @@ def cmd_regioes(args, cfg) -> int:
             arm,
             algoritmos=args.algoritmos.split(","),
             modo=args.modo,
+            fonte=args.fonte,
             limiar_atraso_s=args.limiar,
         )
         _mostrar("regioes", resultado)
@@ -743,7 +744,14 @@ def construir_parser() -> argparse.ArgumentParser:
     s.add_argument(
         "--algoritmos", default="kmeans,dbscan,hdbscan,st-dbscan"
     )
-    s.add_argument("--modo", choices=["eventos", "agregado"], default="eventos")
+    s.add_argument(
+        "--modo", choices=["auto", "eventos", "agregado"], default="auto",
+        help="auto = espaciais por parada, temporal por evento",
+    )
+    s.add_argument(
+        "--fonte", choices=["atraso", "previsao"], default="atraso",
+        help="atraso = variavel do estudo (percursos); previsao = erro da API",
+    )
     s.add_argument("--limiar", type=int, default=300, help="atraso minimo, em segundos")
     s.set_defaults(func=cmd_regioes)
 
