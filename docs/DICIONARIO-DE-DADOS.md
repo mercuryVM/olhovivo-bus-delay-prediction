@@ -1,7 +1,9 @@
 # Dicionário de Dados
 
 Conjunto de dados de saída do projeto, produzido a partir de uma semana de
-coleta da API Olho Vivo da SPTrans.
+coleta da API Olho Vivo da SPTrans. A coleta bruta somou 90,0 milhões de
+posições de veículos e 15,8 milhões de previsões de chegada; delas foram
+reconstruídas 451.409 chegadas reais às paradas.
 
 ---
 
@@ -12,9 +14,12 @@ consecutivas, numa viagem.
 
 | | |
 |---|---|
-| Linhas | ~150 a 300 mil (7 dias, 10 linhas monitoradas nos dois sentidos) |
+| Linhas | 421.325 |
+| Viagens | 17.450 |
+| Linhas de ônibus | 10, nos dois sentidos (29 códigos de linha × sentido) |
 | Colunas | 32, das quais 16 principais |
-| Período | 7 dias consecutivos |
+| Período | 02/09/2026 19h22 a 09/09/2026 19h22, com pausa diária das 01h às 04h |
+| Taxa de atraso | 24,4 % dos trechos acima de 20 % do tempo de referência |
 | Formato | Parquet e MongoDB |
 
 ### Principais colunas
@@ -45,6 +50,9 @@ consecutivas, numa viagem.
 `fim_de_semana`, `celula`, `confianca` — identificação, geometria e controle de
 qualidade.
 
+> A mediana de `atraso_s` é 0 s por construção — a referência é a própria
+> mediana do trecho. A informação está na cauda (p90 de 40,5 s) e na taxa.
+
 ---
 
 ## Conjunto complementar — `previsao_realizado`
@@ -54,7 +62,8 @@ chegou. Mede a **qualidade da previsão da SPTrans**, e não a irregularidade da
 operação — por isso é secundário em relação ao `percursos`.
 
 **Unidade de observação:** uma previsão de chegada e a chegada correspondente.
-21 colunas.
+12.982.114 linhas — 88,7 % das previsões avaliadas casaram com uma chegada —
+e 21 colunas.
 
 | Coluna | Tipo | Descrição |
 |---|---|---|
@@ -90,12 +99,16 @@ tomando o instante em que a posição do veículo cruza a da parada.
   O erro daí é sempre positivo (+12 a +35 s) e maior em pontos de grande
   embarque — logo, maior nas áreas centrais. Comparações entre regiões de
   demanda muito diferente devem ser lidas com essa ressalva.
+- **A madrugada foi coberta só em parte.** A coleta pausou todos os dias das 01h
+  às 04h (21 h das 168 h), e houve uma interrupção de 15 min em 04/09 às 21h49.
+  Nenhuma das linhas monitoradas é noturna, mas a faixa `madrugada` fica
+  sub-representada.
 - **Só existe dado onde a API publica previsão.** Das 150 linhas de maior frota,
   a maioria não tem previsão publicada em parcela relevante do itinerário; as
   linhas monitoradas foram escolhidas por esse critério, então não constituem
   amostra aleatória da rede.
 - **Uma semana não cobre sazonalidade.** Feriado, chuva forte ou obra podem
-  dominar a janela.
+  dominar a janela — e a semana coletada inclui o feriado de 07/09.
 - **Só entra veículo em circulação.** Viagem não realizada não aparece, o que
   subestima o problema sentido pelo passageiro.
 
