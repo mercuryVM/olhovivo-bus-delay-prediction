@@ -20,3 +20,7 @@ h3>=4.1
 # Visualização
 matplotlib>=3.9
 folium>=0.17
+
+# Painel interativo (app/painel.py)
+streamlit>=1.38
+pydeck>=0.9

@@ -6,6 +6,13 @@ impactadas.
 
 Trabalho de Sistemas de Informação — EACH/USP.
 
+**Painel interativo com os resultados da semana coletada:
+<https://onibus.tagg.chat>**
+
+O conjunto de dados de saída (`percursos`, `previsao_realizado` e as regiões)
+está nas [Releases](https://github.com/mercuryVM/olhovivo-bus-delay-prediction/releases)
+do repositório, com somas de verificação.
+
 - [`docs/DICIONARIO-DE-DADOS.md`](docs/DICIONARIO-DE-DADOS.md) — descrição do
   conjunto de dados de saída: linhas, principais colunas e limitações.
 - [`docs/apendice-metodologico.md`](docs/apendice-metodologico.md) — detalhamento
@@ -66,6 +73,18 @@ python -m olhovivo atraso      # variável de atraso por trecho
 python -m olhovivo casar       # previsão × realizado
 python -m olhovivo regioes     # K-means, DBSCAN, HDBSCAN, ST-DBSCAN
 ```
+
+Os resultados podem ser explorados num mapa interativo de São Paulo:
+
+```bash
+streamlit run app/painel.py
+```
+
+O painel lê as saídas de `dados/derivado/` (ou de `dados_semana/`, se existir;
+a variável `OLHOVIVO_DADOS` aponta outra pasta) e mostra o atraso por parada, as
+regiões encontradas pelos agrupamentos, os fluxos origem → destino, os padrões
+por hora e dia, e o erro da previsão da API. A aba de previsão usa
+`painel_previsao.parquet`, gerado por `scripts/agrega_previsao.py`.
 
 Dois comandos auxiliares ajudam a preparar a coleta:
 `linhas-candidatas` ranqueia as linhas por quanto rendem de dado, e

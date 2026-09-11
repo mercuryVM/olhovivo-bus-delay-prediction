@@ -1,0 +1,9 @@
+[theme]
+# azul neutro: o vermelho fica reservado para "atraso" nos mapas
+primaryColor = "#2563eb"
+
+[client]
+toolbarMode = "minimal"
+
+[browser]
+gatherUsageStats = false
