@@ -537,5 +537,5 @@ trajetórias individuais de prefixo.
 - Newson, P. and Krumm, J. (2009). Hidden Markov map matching through noise and sparseness. In *Proceedings of the 17th ACM SIGSPATIAL International Conference on Advances in Geographic Information Systems*, pages 336-343.
 - SPTrans (2026). *API Olho Vivo v2.1 — Guia de referência*. São Paulo Transporte S.A. https://www.sptrans.com.br/desenvolvedores/.
 - Uber Technologies (2018). *H3: A Hexagonal Hierarchical Geospatial Indexing System*. https://h3geo.org.
-- Wessel, N., Allen, J., and Farber, S. (2017). Constructing a routable retrospective transit timetable from a real-time vehicle location feed and GTFS. *Journal of Transport Geography*, 62:92-103.
+- Wessel, N., Allen, J., and Farber, S. (2017). Constructing a routable retrospective transit timetable from a real-time vehicle location feed and GTFS. *Journal of Transport Geography*, 62:92-97.
 - Widrow, B., Kollár, I., and Liu, M.-C. (1996). Statistical theory of quantization. *IEEE Transactions on Instrumentation and Measurement*, 45(2):353-361.
