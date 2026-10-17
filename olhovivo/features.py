@@ -32,6 +32,12 @@ from .storage import Armazenamento
 
 log = logging.getLogger("olhovivo.features")
 
+# Fracao do periodo (por ordem temporal) que vai para o treino. E a mesma de
+# `modelos.divisao_temporal`: toda estatistica do periodo usada como atributo
+# (tempo tipico de trecho, perfil da parada) so pode ver o que vem antes deste
+# corte, senao carrega o teste para dentro do treino.
+FRACAO_TREINO = 0.7
+
 # feriados nacionais + municipais de SP relevantes para a operacao
 FERIADOS = {
     "01-01", "01-25", "04-21", "05-01", "07-09", "09-07",
@@ -44,12 +50,19 @@ def _marcar_feriado(serie: pd.Series) -> pd.Series:
 
 
 # ---------------------------------------------------------------- percursos
-def tabela_percursos(arm: Armazenamento) -> pd.DataFrame:
+def tabela_percursos(
+    arm: Armazenamento, ate: pd.Timestamp | None = None
+) -> pd.DataFrame:
     """
     Tempo de percurso entre paradas consecutivas, por viagem.
 
     E aqui que aparece o "atraso" no sentido operacional: o trecho levou quanto
     tempo a mais do que costuma levar naquela faixa horaria?
+
+    `ate`: se dado, o tempo tipico (e, com ele, `desvio_percurso_s` e
+    `razao_percurso`) usa so trechos concluidos antes desse instante. E o que
+    se passa quando a tabela vira atributo de modelo: a mediana da semana
+    inteira incluiria o periodo de teste.
     """
     ch = arm.ler_derivado("chegadas")
     if ch.empty:
@@ -74,8 +87,9 @@ def tabela_percursos(arm: Armazenamento) -> pd.DataFrame:
     trechos["hora"] = local.dt.hour
     trechos["dia_semana"] = local.dt.dayofweek
 
+    referencia = trechos if ate is None else trechos[trechos["t_chegada"] < ate]
     base = (
-        trechos.groupby(["cl", "ordem", "hora"])["tempo_percurso_s"]
+        referencia.groupby(["cl", "ordem", "hora"])["tempo_percurso_s"]
         .median()
         .rename("percurso_tipico_s")
         .reset_index()
@@ -91,6 +105,79 @@ def tabela_percursos(arm: Armazenamento) -> pd.DataFrame:
 
 
 # ------------------------------------------------------------------ tabular
+NS = "datetime64[ns, UTC]"
+
+
+def _atributos_defasados(df: pd.DataFrame, percursos: pd.DataFrame) -> pd.DataFrame:
+    """
+    Estado da linha no instante da CONSULTA (`ts_coleta`), nao da chegada.
+
+    Cada linha de `previsao_realizado` e uma consulta; a mesma chegada aparece
+    em varias, com horizontes diferentes. Por isso nada aqui usa a chegada
+    prevista nem o vizinho na ordem de `t_chegada` (que costuma ser outra
+    consulta da MESMA chegada). Tudo vem de chegadas ja ocorridas antes de
+    `ts_coleta`, via `merge_asof` estrito para tras:
+
+    * erro da ultima chegada na parada, media das 3 ultimas e da ultima na
+      linha — uma chegada vale o erro mediano entre as consultas que a miraram;
+    * `headway_anterior_s`: intervalo entre as duas ultimas chegadas na parada;
+      `desde_ultimo_s`: tempo desde a ultima;
+    * desvio do ultimo trecho que ESTA viagem ja completou.
+    """
+    df = df.assign(
+        ts_coleta=df["ts_coleta"].astype(NS), t_chegada=df["t_chegada"].astype(NS)
+    ).sort_values("ts_coleta")
+
+    chegadas = (
+        df.groupby(["cl", "cp", "viagem_id", "t_chegada"], sort=False)["erro_s"]
+        .median().rename("erro_chegada_s").reset_index()
+        .sort_values(["cl", "cp", "t_chegada"])
+    )
+    por_parada = chegadas.groupby(["cl", "cp"], sort=False)
+    parada = pd.DataFrame({
+        "cl": chegadas["cl"],
+        "cp": chegadas["cp"],
+        "t_ultima": chegadas["t_chegada"],
+        "erro_anterior_parada_s": chegadas["erro_chegada_s"],
+        "erro_media3_parada_s": por_parada["erro_chegada_s"].transform(
+            lambda s: s.rolling(3, min_periods=1).mean()
+        ),
+        "headway_anterior_s": por_parada["t_chegada"].diff().dt.total_seconds(),
+    }).sort_values("t_ultima")
+    df = pd.merge_asof(
+        df, parada, left_on="ts_coleta", right_on="t_ultima", by=["cl", "cp"],
+        allow_exact_matches=False,
+    )
+    df["desde_ultimo_s"] = (df["ts_coleta"] - df["t_ultima"]).dt.total_seconds()
+
+    linha = (
+        chegadas[["cl", "t_chegada", "erro_chegada_s"]]
+        .rename(columns={"t_chegada": "t_ultima_linha",
+                         "erro_chegada_s": "erro_anterior_linha_s"})
+        .sort_values("t_ultima_linha")
+    )
+    df = pd.merge_asof(
+        df, linha, left_on="ts_coleta", right_on="t_ultima_linha", by="cl",
+        allow_exact_matches=False,
+    )
+
+    if not percursos.empty:
+        trecho = (
+            percursos[["viagem_id", "t_chegada", "desvio_percurso_s", "razao_percurso"]]
+            .rename(columns={"t_chegada": "t_ultimo_trecho"})
+            .astype({"viagem_id": df["viagem_id"].dtype, "t_ultimo_trecho": NS})
+            .sort_values("t_ultimo_trecho")
+        )
+        df = pd.merge_asof(
+            df, trecho, left_on="ts_coleta", right_on="t_ultimo_trecho",
+            by="viagem_id", allow_exact_matches=False,
+        )
+
+    return df.drop(
+        columns=["t_ultima", "t_ultima_linha", "t_ultimo_trecho"], errors="ignore"
+    )
+
+
 def montar_tabela(arm: Armazenamento, min_confianca: float = 0.4) -> pd.DataFrame:
     """Tabela de modelagem para o XGBoost."""
     df = arm.ler_derivado("previsao_realizado")
@@ -101,8 +188,15 @@ def montar_tabela(arm: Armazenamento, min_confianca: float = 0.4) -> pd.DataFram
     for coluna in ("ts_coleta", "t_previsto", "t_chegada"):
         df[coluna] = pd.to_datetime(df[coluna], utc=True)
 
+    # Calendario pelo horario PREVISTO, conhecido no instante da consulta. As
+    # colunas `hora`, `dia_semana` e `faixa` de previsao_realizado vem da
+    # chegada REAL e vazariam o proprio erro: previsao para 17h58 com `hora`
+    # 18 ja diz que o onibus atrasou ao menos 2 min.
     local = df["t_previsto"].dt.tz_convert("America/Sao_Paulo")
     minuto_dia = local.dt.hour * 60 + local.dt.minute
+    df["hora"] = local.dt.hour.astype("int8")
+    df["dia_semana"] = local.dt.dayofweek.astype("int8")
+    df = df.drop(columns=["faixa"], errors="ignore")
 
     df["minuto_dia"] = minuto_dia
     df["sin_dia"] = np.sin(2 * np.pi * minuto_dia / 1440)
@@ -136,19 +230,11 @@ def montar_tabela(arm: Armazenamento, min_confianca: float = 0.4) -> pd.DataFram
     )
     df = df.merge(carga, on=["cl", "bin5"], how="left")
 
-    # atributos defasados: como estava o atraso ANTES desta chegada
-    df = df.sort_values("t_chegada")
-    df["erro_anterior_parada_s"] = df.groupby(["cl", "cp"], sort=False)["erro_s"].shift(1)
-    df["erro_media3_parada_s"] = df.groupby(["cl", "cp"], sort=False)["erro_s"].transform(
-        lambda s: s.shift(1).rolling(3, min_periods=1).mean()
-    )
-    df["erro_anterior_linha_s"] = df.groupby("cl", sort=False)["erro_s"].shift(1)
-
-    # desvio de percurso do trecho anterior
-    percursos = tabela_percursos(arm)
-    if not percursos.empty:
-        chave = percursos[["viagem_id", "cp", "desvio_percurso_s", "razao_percurso"]]
-        df = df.merge(chave, on=["viagem_id", "cp"], how="left")
+    # o mesmo corte de `modelos.divisao_temporal` (linhas ordenadas por
+    # t_chegada): o tempo tipico por tras de `desvio_percurso_s` so ve o treino
+    ordenado = df["t_chegada"].sort_values(ignore_index=True)
+    corte = ordenado.iloc[min(int(len(ordenado) * FRACAO_TREINO), len(ordenado) - 1)]
+    df = _atributos_defasados(df, tabela_percursos(arm, ate=corte))
 
     df["alvo_erro_s"] = df["erro_s"]
     df["alvo_atrasado"] = (df["erro_s"] >= 300).astype("int8")
@@ -176,7 +262,8 @@ COLUNAS_MODELO = [
     "fracao_percurso",
     "lat",
     "lon",
-    "headway_obs_s",
+    "headway_anterior_s",
+    "desde_ultimo_s",
     "veiculos_ativos",
     "erro_anterior_parada_s",
     "erro_media3_parada_s",
@@ -227,11 +314,15 @@ def montar_sequencias(
         g = grupo.sort_values("bin")
         # reindexa em grade regular para nao pular buracos silenciosamente
         g = g.set_index("bin").asfreq(f"{bin_min}min")
+        # o alvo tem de ser um bin observado; um bin preenchido por ffill repete
+        # o anterior e premia o modelo por copiar o ultimo passo da janela
+        observado = g["erro_medio"].notna()
         g[["erro_medio", "erro_max"]] = g[["erro_medio", "erro_max"]].ffill(limit=2)
         g = g.fillna({"volume": 0, "headway": g["headway"].median()})
         g = g.dropna(subset=["erro_medio"])
         if len(g) < passos + 1:
             continue
+        observado = observado.reindex(g.index).to_numpy()
 
         valores = g[["erro_medio", "erro_max", "headway", "volume"]].to_numpy("float32")
         hora = g.index.tz_convert("America/Sao_Paulo").hour.to_numpy("float32") / 23.0
@@ -239,6 +330,8 @@ def montar_sequencias(
         valores = np.column_stack([valores, hora, dia])
 
         for i in range(len(valores) - passos):
+            if not observado[i + passos]:
+                continue
             X.append(valores[i : i + passos])
             y.append(float(valores[i + passos, 0]))
             chaves.append((int(cl), int(cp), g.index[i + passos]))
@@ -275,7 +368,11 @@ def montar_sequencias(
 
 
 # -------------------------------------------------------------------- grafo
-def montar_grafo(arm: Armazenamento, raio_vizinhanca_m: float = 400.0) -> dict:
+def montar_grafo(
+    arm: Armazenamento,
+    raio_vizinhanca_m: float = 400.0,
+    fracao_atributos: float = FRACAO_TREINO,
+) -> dict:
     """
     Grafo da rede para a GNN.
 
@@ -285,14 +382,22 @@ def montar_grafo(arm: Armazenamento, raio_vizinhanca_m: float = 400.0) -> dict:
     * arestas de vizinhanca: paradas a menos de `raio_vizinhanca_m` uma da
       outra, mesmo sem linha em comum — e assim que o congestionamento se
       propaga entre corredores paralelos
-    * atributos do no: estatisticas de atraso, headway, volume, posicao
-    * alvo do no: erro mediano
+    * atributos do no: estatisticas de atraso, headway, volume, posicao —
+      calculadas so com o inicio do periodo (`fracao_atributos` das chegadas)
+    * alvo do no: erro mediano no RESTO do periodo. Atributo e alvo sobre as
+      mesmas chegadas seriam a mesma conta (media ~ mediana). No sem chegada
+      no periodo do alvo fica com alvo NaN e fora da avaliacao.
     """
     from . import geo
 
     df = arm.ler_derivado("previsao_realizado")
     if df.empty:
         raise RuntimeError("sem dataset casado")
+
+    df["t_chegada"] = pd.to_datetime(df["t_chegada"], utc=True)
+    corte = df["t_chegada"].quantile(fracao_atributos)
+    futuro = df[df["t_chegada"] >= corte]
+    df = df[df["t_chegada"] < corte]
 
     nos = (
         df.groupby("cp")
@@ -309,6 +414,7 @@ def montar_grafo(arm: Armazenamento, raio_vizinhanca_m: float = 400.0) -> dict:
         .reset_index()
         .fillna(0.0)
     )
+    nos["alvo"] = nos["cp"].map(futuro.groupby("cp")["erro_s"].median())
     indice = {int(cp): i for i, cp in enumerate(nos["cp"])}
 
     arestas: list[tuple[int, int]] = []
@@ -344,9 +450,9 @@ def montar_grafo(arm: Armazenamento, raio_vizinhanca_m: float = 400.0) -> dict:
         log.warning("scipy ausente: grafo sem arestas de vizinhanca espacial")
 
     atributos = nos[
-        ["lat", "lon", "n", "erro_medio", "erro_desvio", "headway", "linhas"]
+        ["lat", "lon", "n", "erro_medio", "erro_mediano", "erro_desvio", "headway", "linhas"]
     ].to_numpy("float32")
-    alvo = nos["erro_mediano"].to_numpy("float32")
+    alvo = nos["alvo"].to_numpy("float32")
     edge_index = np.asarray(arestas, dtype="int64").T if arestas else np.zeros((2, 0), "int64")
 
     destino = arm.raiz / "derivado" / "grafo.npz"
@@ -358,8 +464,12 @@ def montar_grafo(arm: Armazenamento, raio_vizinhanca_m: float = 400.0) -> dict:
         edge_weight=np.asarray(pesos, dtype="float32"),
         cp=nos["cp"].to_numpy("int64"),
         atributos=np.array(
-            ["lat", "lon", "n", "erro_medio", "erro_desvio", "headway", "linhas"]
+            ["lat", "lon", "n", "erro_medio", "erro_mediano", "erro_desvio", "headway", "linhas"]
         ),
     )
     log.info("grafo: %d nos, %d arestas -> %s", len(nos), edge_index.shape[1], destino)
-    return {"nos": int(len(nos)), "arestas": int(edge_index.shape[1])}
+    return {
+        "nos": int(len(nos)),
+        "nos_com_alvo": int(nos["alvo"].notna().sum()),
+        "arestas": int(edge_index.shape[1]),
+    }

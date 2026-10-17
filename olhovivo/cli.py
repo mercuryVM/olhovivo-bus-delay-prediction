@@ -623,15 +623,23 @@ def cmd_treinar(args, cfg) -> int:
     arm = Armazenamento(cfg, backends=["parquet"])
     try:
         derivado = arm.raiz / "derivado"
-        if args.modelo == "xgboost" and args.alvo == "atraso":
+        if args.alvo == "atraso":
             caminho = derivado / "percursos.parquet"
             if not caminho.exists():
                 print("rode antes: python -m olhovivo atraso")
                 return 2
-            saida = modelos.treinar_atraso(
-                pd.read_parquet(caminho),
-                float(cfg.get("atraso.limiar_percentual", 0.20)),
-            )["resultado"]
+            limiar = float(cfg.get("atraso.limiar_percentual", 0.20))
+            percursos = pd.read_parquet(caminho)
+            if args.modelo == "xgboost":
+                saida = modelos.treinar_atraso(percursos, limiar)["resultado"]
+            else:
+                from . import modelos_atraso
+
+                treinar = {
+                    "lstm": modelos_atraso.treinar_lstm_atraso,
+                    "gnn": modelos_atraso.treinar_gnn_atraso,
+                }[args.modelo]
+                saida = treinar(percursos, limiar)["resultado"]
         elif args.modelo == "xgboost":
             caminho = derivado / "modelagem.parquet"
             if not caminho.exists():
