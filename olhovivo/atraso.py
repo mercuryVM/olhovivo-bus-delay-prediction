@@ -218,10 +218,20 @@ def construir(
     return resumo
 
 
+# So o que se conhece no instante de partida da parada de origem. Ficam de
+# fora `velocidade_kmh` (extensao / tempo_percurso_s: com `extensao_m` e
+# `percurso_tipico_s` o modelo reconstroi o proprio alvo) e `headway_s` (usa a
+# chegada deste veiculo no destino). `percurso_tipico_s` e recalculado em
+# `modelos.treinar_atraso` so com o periodo de treino, e os desvios defasados
+# sao montados la tambem: o do trecho anterior da mesma viagem e o dos
+# veiculos que acabaram de completar o mesmo trecho (o transito agora).
 COLUNAS_MODELO = [
     "hora", "dia_semana", "pico", "fim_de_semana",
     "ordem_origem", "extensao_m", "percurso_tipico_s",
-    "headway_s", "velocidade_kmh", "sentido", "lat", "lon",
+    "atraso_trecho_anterior_s",
+    "desvio_recente_trecho_s", "n_recente_trecho",
+    "desvio_ultimo_veiculo_s", "desde_ultimo_veiculo_s",
+    "sentido", "lat", "lon",
 ]
 
 
