@@ -37,7 +37,9 @@ from typing import Any, Sequence
 import numpy as np
 import pandas as pd
 
+from .contexto_viagem import COLUNAS_CONTEXTO
 from .features import NS
+from .frota import COLUNAS_FROTA
 from .modelos import _classificacao, _metricas, baselines_atraso, preparar_atraso
 from .vizinhanca import COLUNAS_VIZINHANCA
 
@@ -64,7 +66,9 @@ def _contexto(df: pd.DataFrame, com_desvios: bool) -> np.ndarray:
     Atributos da propria linha, conhecidos em `t_origem`. `com_desvios` inclui
     os desvios recentes que o XGBoost ve; a LSTM recebe essa informacao pelas
     sequencias e fica com calendario e trecho. Os atributos de vizinhanca
-    (`vizinhanca.COLUNAS_VIZINHANCA`) entram nos dois casos, quando a base os traz.
+    (`vizinhanca.COLUNAS_VIZINHANCA`), os de viagem, tendencia e feriado
+    (`contexto_viagem.COLUNAS_CONTEXTO`) e os da frota inteira (`frota.COLUNAS_FROTA`)
+    entram nos dois casos, quando a base os traz.
     """
     hora = df["hora"].to_numpy("float64")
     dia = df["dia_semana"].to_numpy("float64")
@@ -75,7 +79,7 @@ def _contexto(df: pd.DataFrame, com_desvios: bool) -> np.ndarray:
         df["percurso_tipico_s"], df["extensao_m"], df["ordem_origem"],
         df["lat"], df["lon"],
     ]
-    extras = [c for c in COLUNAS_VIZINHANCA if c in df.columns]
+    extras = [c for c in COLUNAS_VIZINHANCA + COLUNAS_CONTEXTO + COLUNAS_FROTA if c in df.columns]
     if com_desvios:
         extras = ["atraso_trecho_anterior_s", "desvio_recente_trecho_s",
                   "n_recente_trecho", "desvio_ultimo_veiculo_s",

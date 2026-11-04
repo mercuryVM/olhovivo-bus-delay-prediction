@@ -592,15 +592,39 @@ def treinar_gnn(
 JANELA_RECENTE = pd.Timedelta("30min")
 
 
-def _referencia_treino(df: pd.DataFrame, indice_treino: pd.Index) -> pd.Series:
-    """Tempo mediano do trecho, sentido e faixa, so com o treino."""
+def tipo_de_dia(df: pd.DataFrame) -> pd.Series:
+    """'util', 'sabado' ou 'domingo' (domingos e feriados), pela data local de `t_origem`."""
+    from .contexto_viagem import FERIADOS
+
+    local = pd.to_datetime(df["t_origem"], utc=True).dt.tz_convert("America/Sao_Paulo")
+    dia = local.dt.dayofweek
+    feriado = local.dt.strftime("%Y-%m-%d").isin(FERIADOS)
+    tipo = np.where(feriado | (dia == 6), "domingo", np.where(dia == 5, "sabado", "util"))
+    return pd.Series(tipo, index=df.index)
+
+
+def _referencia_treino(
+    df: pd.DataFrame, indice_treino: pd.Index, por_tipo_dia: bool = False, minimo: int = 3
+) -> pd.Series:
+    """
+    Tempo mediano do trecho, sentido e faixa, so com o treino. Com
+    `por_tipo_dia`, separa dia util, sabado e domingo/feriado quando ha ao menos
+    `minimo` passagens; sem isso cai para a faixa sem tipo de dia e, por fim,
+    para o trecho em qualquer faixa.
+    """
     treino = df.loc[indice_treino]
-    fina = treino.groupby(["cl", "ordem_origem", "faixa"])["tempo_percurso_s"].median()
-    grossa = treino.groupby(["cl", "ordem_origem"])["tempo_percurso_s"].median()
-    ref = df.join(fina.rename("_ref"), on=["cl", "ordem_origem", "faixa"])["_ref"]
-    # faixa sem esse trecho no treino: a mediana do trecho em qualquer faixa
-    reserva = df.join(grossa.rename("_ref"), on=["cl", "ordem_origem"])["_ref"]
-    return ref.fillna(reserva)
+    niveis = [["cl", "ordem_origem", "faixa"], ["cl", "ordem_origem"]]
+    if por_tipo_dia:
+        df = df.assign(_tipo=tipo_de_dia(df))
+        treino = df.loc[indice_treino]
+        niveis.insert(0, ["cl", "ordem_origem", "_tipo", "faixa"])
+    ref = pd.Series(np.nan, index=df.index)
+    for chave in niveis:
+        g = treino.groupby(chave)["tempo_percurso_s"].agg(["median", "size"])
+        # o minimo so vale para o nivel por tipo de dia: os demais seguem como antes
+        g = g.loc[g["size"] >= (minimo if "_tipo" in chave else 1), "median"]
+        ref = ref.fillna(df.join(g.rename("_ref"), on=chave)["_ref"])
+    return ref
 
 
 def _desvio_recente(df: pd.DataFrame) -> pd.DataFrame:
@@ -651,7 +675,8 @@ def _desvio_recente(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def _atributos_atraso(
-    df: pd.DataFrame, indice_treino: pd.Index, limiar_percentual: float
+    df: pd.DataFrame, indice_treino: pd.Index, limiar_percentual: float,
+    por_tipo_dia: bool = False,
 ) -> pd.DataFrame:
     """
     Alvo e atributos de atraso que dependem da divisao treino/teste.
@@ -668,7 +693,7 @@ def _atributos_atraso(
     Tudo e conhecido no instante `t_origem`.
     """
     df = df.copy()
-    df["percurso_tipico_s"] = _referencia_treino(df, indice_treino)
+    df["percurso_tipico_s"] = _referencia_treino(df, indice_treino, por_tipo_dia)
     df["alvo_s"] = df["tempo_percurso_s"] - df["percurso_tipico_s"]
     df["alvo_atrasado"] = (
         df["alvo_s"] >= limiar_percentual * df["percurso_tipico_s"]
@@ -761,12 +786,16 @@ def treinar_atraso(
         raise RuntimeError("instale: pip install xgboost") from exc
 
     from .atraso import COLUNAS_MODELO as COLUNAS_ATRASO
+    from .contexto_viagem import COLUNAS_CONTEXTO
+    from .frota import COLUNAS_FROTA
     from .vizinhanca import COLUNAS_VIZINHANCA
 
     base = base or preparar_atraso(df, limiar_percentual)
     df = base["df"].copy()
-    # os atributos de vizinhanca entram quando a base os traz (vizinhanca.atributos)
-    colunas = [c for c in COLUNAS_ATRASO + COLUNAS_VIZINHANCA if c in df.columns]
+    # vizinhanca, contexto da viagem e frota entram quando a base os traz
+    # (vizinhanca.atributos, contexto_viagem.atributos, frota.atributos)
+    colunas = [c for c in COLUNAS_ATRASO + COLUNAS_VIZINHANCA + COLUNAS_CONTEXTO + COLUNAS_FROTA
+               if c in df.columns]
     for c in colunas:
         df[c] = pd.to_numeric(df[c], errors="coerce")
     treino = df.loc[base["treino"]]

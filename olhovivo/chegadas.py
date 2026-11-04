@@ -42,7 +42,7 @@ import numpy as np
 import pandas as pd
 
 from . import geo
-from .storage import ESQUEMA_LINHA_PARADA, Armazenamento, agora_utc
+from .storage import ESQUEMA_LINHA_PARADA, ESQUEMA_PARADAS, Armazenamento, agora_utc
 
 log = logging.getLogger("olhovivo.chegadas")
 
@@ -399,6 +399,8 @@ def processar(
         "velocidade_max_kmh": cfg.get("chegadas.velocidade_max_kmh", 80),
     }
     dist_max_tracado = float(cfg.get("chegadas.dist_max_parada_tracado_m", 120))
+    paradas_gtfs = str(cfg.get("chegadas.paradas_gtfs", False)).lower() in ("1", "true", "sim", "yes")
+    novas_gtfs: list[pd.DataFrame] = []
     proj = geo.obter_projecao(
         int(cfg.get("geo.epsg_metrico", 31983)),
         float(cfg.get("geo.ancora_lat", -23.5505)),
@@ -572,6 +574,29 @@ def processar(
         ref, lat_t, lon_t, diag = construido
         diagnostico[cl] = diag
 
+        # O catalogo da API so traz as paradas com previsao, que sao de 40% a 87%
+        # das paradas da linha: sem as demais, um "trecho entre paradas
+        # consecutivas" pula paradas e chega a 5 km. Com o traçado do GTFS, as
+        # paradas da mesma viagem (stop_id == cp) completam a sequencia.
+        if paradas_gtfs and feed is not None and diag.get("origem") == "gtfs":
+            seq = feed.sequencia_paradas(diag["trip_id"]).dropna(subset=["stop_lat", "stop_lon"])
+            faltam = seq[~seq["stop_id"].astype("int64").isin(paradas["cp"].astype("int64"))]
+            if len(faltam):
+                extras = pd.DataFrame({
+                    "cp": faltam["stop_id"].astype("int64").to_numpy(),
+                    "nome": faltam.get("stop_name"),
+                    "endereco": faltam.get("stop_desc"),
+                    "lat": faltam["stop_lat"].astype("float64").to_numpy(),
+                    "lon": faltam["stop_lon"].astype("float64").to_numpy(),
+                    "celula": None,
+                })
+                paradas = pd.concat(
+                    [paradas, extras[paradas.columns.intersection(extras.columns)]],
+                    ignore_index=True,
+                )
+                diag["paradas_so_gtfs"] = int(len(extras))
+                novas_gtfs.append(extras)
+
         (dir_tracados / f"{cl}.json").write_text(
             json.dumps(
                 {"cl": cl, "lat": lat_t.tolist(), "lon": lon_t.tolist(), **diag},
@@ -638,6 +663,29 @@ def processar(
         arm.salvar_catalogo("linha_parada", vinculos_atualizados, ESQUEMA_LINHA_PARADA)
         if arm.mongo:
             arm.mongo.upsert_linha_parada(vinculos_atualizados)
+
+    if novas_gtfs:
+        # as paradas que so existem no GTFS entram no catalogo, com nome e posicao,
+        # para o restante do pipeline (nomes, regioes) as enxergar
+        extras = pd.concat(novas_gtfs, ignore_index=True).drop_duplicates(subset=["cp"])
+        extras = extras[~extras["cp"].isin(paradas_cat["cp"])]
+        if len(extras):
+            def texto(v):
+                # o GTFS deixa stop_desc vazio em muitas paradas: NaN nao cabe em coluna de texto
+                return None if v is None or (isinstance(v, float) and np.isnan(v)) else str(v)
+
+            registros = [
+                {**r, "nome": texto(r.get("nome")), "endereco": texto(r.get("endereco")),
+                 "celula": texto(r.get("celula"))}
+                for r in paradas_cat.to_dict("records")
+            ] + [
+                {"cp": int(r.cp), "nome": texto(r.nome), "endereco": texto(r.endereco),
+                 "lat": float(r.lat), "lon": float(r.lon), "celula": None,
+                 "atualizado_em": agora_utc()}
+                for r in extras.itertuples()
+            ]
+            arm.salvar_catalogo("paradas", registros, ESQUEMA_PARADAS)
+            log.info("catalogo: +%d paradas vindas do GTFS", len(extras))
 
     if todas:
         todas.sort(key=lambda e: (e["cl"], e["t_chegada"]))

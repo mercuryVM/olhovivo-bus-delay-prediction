@@ -1,6 +1,7 @@
 .env
 dados/
 dados_semana/
+dados_mes/
 __pycache__/
 *.pyc
 .venv/

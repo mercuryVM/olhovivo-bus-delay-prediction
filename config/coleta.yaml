@@ -98,6 +98,11 @@ chegadas:
   # GTFS e sempre infere o itinerário dos próprios dados coletados.
   fonte_tracado: "gtfs"
 
+  # com o traçado do GTFS, completa as paradas da linha com as da viagem do
+  # GTFS. O catalogo da API so tem as paradas com previsao (40% a 87% delas),
+  # e sem as demais um "trecho entre paradas consecutivas" pula paradas.
+  paradas_gtfs: true
+
   # distância máxima parada <-> traçado para a parada ser considerada atendida.
   # O cadastro de paradas de SP tem erro da mesma ordem: há linhas em que só
   # 1/3 das paradas fica a menos de 50 m do shape. Paradas acima do limite são
