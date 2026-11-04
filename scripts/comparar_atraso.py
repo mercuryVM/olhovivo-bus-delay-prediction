@@ -10,12 +10,14 @@ derivado/modelos/comparacao_atraso.json e imprime a tabela.
 Os tres modelos recebem tambem os atributos de vizinhanca (`vizinhanca.py`):
 trechos vizinhos da linha, o trecho fisico com todas as linhas e a previsao da
 API, esta lida do parquet de previsoes (padrao: derivado/previsao_realizado).
+E os de viagem, tendencia e feriado (`contexto_viagem.py`).
 
 Cada etapa (a base, o XGBoost e cada rodada de rede neural, por variante e
-semente) e gravada assim que termina em derivado/modelos/cache_atraso_v2/. Se
+semente) e gravada assim que termina em derivado/modelos/cache_atraso_v3/. Se
 o processo cair no meio, rodar de novo retoma de onde parou. Apague a pasta
-para recalcular do zero depois de mudar o codigo. A versao sem vizinhanca
-ficou em cache_atraso/ e comparacao_atraso_v1.json.
+para recalcular do zero depois de mudar o codigo. As versoes anteriores ficaram
+em cache_atraso/ (sem vizinhanca, comparacao_atraso_v1.json) e
+cache_atraso_v2/ (sem contexto da viagem, comparacao_atraso_v2.json).
 """
 import json
 import logging
@@ -28,14 +30,14 @@ import numpy as np
 import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from olhovivo import modelos, modelos_atraso, vizinhanca  # noqa: E402
+from olhovivo import contexto_viagem, modelos, modelos_atraso, vizinhanca  # noqa: E402
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s", datefmt="%H:%M:%S")
 log = logging.getLogger("comparar_atraso")
 raiz = Path(sys.argv[1] if len(sys.argv) > 1 else "dados")
 arq_previsoes = Path(sys.argv[2]) if len(sys.argv) > 2 else raiz / "derivado" / "previsao_realizado.parquet"
 saida = raiz / "derivado" / "modelos"
-cache = saida / "cache_atraso_v2"
+cache = saida / "cache_atraso_v3"
 cache.mkdir(parents=True, exist_ok=True)
 
 LSTM = (("completa", (1, 2, 3)), ("so_viagem", (1,)), ("so_trecho", (1,)))
@@ -59,6 +61,8 @@ percursos = pd.read_parquet(raiz / "derivado" / "percursos.parquet")
 base = etapa("base", lambda: modelos.preparar_atraso(percursos, 0.20))
 viz = etapa("vizinhanca", lambda: vizinhanca.atributos(base["df"], arq_previsoes))
 base["df"] = base["df"].join(viz)
+contexto = etapa("contexto", lambda: contexto_viagem.atributos(base["df"]))
+base["df"] = base["df"].join(contexto)
 log.info("vizinhanca: %s", {c: f"{viz[c].notna().mean():.0%}" for c in
                             ("acima_med", "abaixo_med", "fisico_med", "api_desvio_s")})
 
