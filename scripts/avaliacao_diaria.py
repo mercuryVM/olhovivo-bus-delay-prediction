@@ -15,21 +15,28 @@ Configuracoes:
 * 7d_fixa:      ultimos 7 dias
 * 7d_tipo:      ultimos 7 dias, referencia por tipo de dia (util/sabado/domingo)
 * 7d_tipo_frota: + velocidade da frota inteira no trecho (frota.py)
+* todos_frota:  todos os dias anteriores, com a frota (a escolhida)
+* todos_frota_sem_api: a mesma, sem as variaveis da previsao da API
+* todos_frota_geo: a mesma, com semaforos, corredores, faixas e feiras do
+                GeoSampa (geosampa.py)
+* todos_frota_prog: a mesma, com o intervalo programado do GTFS (programacao.py)
 
 Metricas no conjunto de trechos comum a todas as configuracoes do dia: MAE (s),
 erro relativo (soma dos erros / soma dos tempos reais, comparavel entre
-trechos de tamanhos diferentes), MAE dos trechos de ate 3 min e as linhas de
-base (trivial e atraso recente).
+trechos de tamanhos diferentes), MAE dos trechos de ate 3 min, taxa de acerto
+(erro de ate 20% do tempo real) e as linhas de base (trivial e atraso recente).
 
 Com --redes, cada dia tambem treina LSTM e GNN (3 sementes, media das
 previsoes) e o conjunto dos tres; sem, so o XGBoost (para escolher rapido).
 
 Dados: dados_mes/derivado (percursos com as paradas do GTFS, previsoes da API e
-medidas da frota). Cache em dados_mes/derivado/modelos/cache_diaria/.
+medidas da frota), ou a raiz em OLHOVIVO_ARMAZENAMENTO__RAIZ. Cache em
+derivado/modelos/cache_diaria/.
 """
 import argparse
 import json
 import logging
+import os
 import pickle
 import time
 from datetime import date, timedelta
@@ -41,12 +48,12 @@ import pandas as pd
 import xgboost as xgb
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from olhovivo import contexto_viagem, frota, modelos, modelos_atraso, vizinhanca  # noqa: E402
+from olhovivo import contexto_viagem, frota, geosampa, modelos, modelos_atraso, programacao, vizinhanca  # noqa: E402
 from olhovivo.atraso import COLUNAS_MODELO  # noqa: E402
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s", datefmt="%H:%M:%S")
 log = logging.getLogger("diaria")
-RAIZ = Path(__file__).resolve().parents[1] / "dados_mes"
+RAIZ = Path(os.environ.get("OLHOVIVO_ARMAZENAMENTO__RAIZ") or Path(__file__).resolve().parents[1] / "dados_mes")
 DERIV = RAIZ / "derivado"
 CACHE = DERIV / "modelos" / "cache_diaria"
 CACHE.mkdir(parents=True, exist_ok=True)
@@ -60,6 +67,10 @@ CONFIGS = {
     # a referencia por tipo de dia e a janela de 7 dias perderam nos 3 dias de
     # desenvolvimento (21-23/10); a frota ganhou nos 3 sobre 7d_tipo
     "todos_frota": {"janela": None, "tipo_dia": False, "frota": True},
+    # o modelo usa a previsao da API como entrada: sem ela, ve-se quanto ele depende dela
+    "todos_frota_sem_api": {"janela": None, "tipo_dia": False, "frota": True, "sem_api": True},
+    "todos_frota_geo": {"janela": None, "tipo_dia": False, "frota": True, "geo": True},
+    "todos_frota_prog": {"janela": None, "tipo_dia": False, "frota": True, "prog": True},
 }
 DEV = ["2026-10-21", "2026-10-22", "2026-10-23"]
 FINAL = [f"2026-11-0{d}" for d in range(2, 9)]
@@ -103,7 +114,8 @@ if any(c["frota"] for c in configs.values()):
 
 def ajustar(d: pd.DataFrame, tr, va, te) -> np.ndarray:
     colunas = [c for c in COLUNAS_MODELO + vizinhanca.COLUNAS_VIZINHANCA
-               + contexto_viagem.COLUNAS_CONTEXTO + frota.COLUNAS_FROTA if c in d.columns]
+               + contexto_viagem.COLUNAS_CONTEXTO + frota.COLUNAS_FROTA + geosampa.COLUNAS_GEO
+               + programacao.COLUNAS_PROG if c in d.columns]
     X = d[colunas].apply(pd.to_numeric, errors="coerce")
     reg = xgb.XGBRegressor(
         objective="reg:absoluteerror", eval_metric="mae", n_estimators=1500, max_depth=6,
@@ -130,6 +142,12 @@ def rodar(nome: str, cfg: dict, dia: str) -> dict:
     d = modelos._atributos_atraso(usar, treino.index, 0.20, por_tipo_dia=cfg["tipo_dia"])
     d = d.dropna(subset=["alvo_s"])
     d = d.join(vizinhanca.atributos(d, previsoes)).join(contexto_viagem.atributos(d))
+    if cfg.get("sem_api"):
+        d = d.drop(columns=[c for c in d.columns if c.startswith("api_")])
+    if cfg.get("geo"):
+        d = d.join(geosampa.atributos(d, RAIZ))
+    if cfg.get("prog"):
+        d = d.join(programacao.atributos(d, RAIZ))
     if cfg["frota"]:
         d = d.join(fa)
     tr, va, te = (d.index.intersection(x) for x in (treino.index, validacao.index, i_te))
@@ -167,11 +185,15 @@ for dia in dias_teste:
         erro = np.abs(r["alvo"][pos] - r["previsto"][pos])
         extra = {f"mae_{m}_s": np.abs(r["alvo"][pos] - v[pos]).mean()
                  for m, v in r.get("previsto_por_modelo", {}).items() if m != "xgboost"}
+        extra |= {f"acerto20_{m}": np.mean(np.abs(r["alvo"][pos] - v[pos]) <= 0.2 * real)
+                  for m, v in r.get("previsto_por_modelo", {}).items() if m != "xgboost"}
         linhas.append({
             **extra,
             "dia": dia, "config": nome, "trechos": len(comum),
             "cobertura": len(comum) / (pc["_dia"] == dia).sum(),
             "mae_s": erro.mean(), "erro_rel": erro.sum() / real.sum(),
+            "acerto20": np.mean(erro <= 0.2 * real),
+            "acerto20_trivial": np.mean(np.abs(r["alvo"][pos]) <= 0.2 * real),
             "mae_curtos_s": erro[curto].mean(),
             "trivial_s": np.abs(r["alvo"][pos]).mean(),
             "recente_s": np.abs(r["alvo"][pos] - r["recente"][pos]).mean(),
@@ -184,7 +206,7 @@ print("|---|---|---|---|---|---|---|---|")
 for l in t.itertuples():
     print(f"| {l.dia[5:]} | {l.config} | {l.trechos} | {l.mae_s:.2f} | {l.erro_rel:.1%} | "
           f"{l.mae_curtos_s:.2f} | {l.trivial_s:.2f} | {l.recente_s:.2f} |")
-media = t.groupby("config")[[c for c in t.columns if c.startswith("mae") or c in ("erro_rel", "trivial_s")]].mean()
+media = t.groupby("config")[[c for c in t.columns if c.startswith(("mae", "acerto")) or c in ("erro_rel", "trivial_s")]].mean()
 print("\nmedia dos dias:\n" + media.round(4).to_string())
 ref = t[t.config == list(configs)[0]].set_index("dia")["mae_s"]
 for nome in configs:

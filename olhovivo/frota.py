@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from datetime import date, datetime, time, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -132,7 +133,9 @@ def medidas_do_dia(arm, cfg, dia: date, pares: pd.DataFrame, pontos: dict) -> pd
 
     # so leituras perto de algum par interessam
     arvore = cKDTree(np.c_[pontos["x"], pontos["y"]])
-    dist, j = arvore.query(np.c_[x, y], k=VIZINHOS, distance_upper_bound=RAIO_M, workers=-1)
+    # -1 abre uma thread por core do host, mesmo num pod com limite de CPU
+    trabalhadores = int(os.environ.get("OMP_NUM_THREADS", -1))
+    dist, j = arvore.query(np.c_[x, y], k=VIZINHOS, distance_upper_bound=RAIO_M, workers=trabalhadores)
     n_pts = len(pontos["x"])
     linhas, pares_l, s_l = [], [], []
     for k in range(VIZINHOS):
