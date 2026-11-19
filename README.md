@@ -11,9 +11,12 @@ A base final tem **30 dias de coleta** (02 a 09/09/2026 e 16/10 a 08/11/2026):
 408 milhões de posições da frota inteira, 70,5 milhões de previsões da API e
 2,85 milhões de passagens reconstruídas em 676 trechos de 10 linhas.
 
-A primeira semana de coleta (`percursos`, `previsao_realizado` e as regiões)
-está nas [Releases](https://github.com/mercuryVM/olhovivo-bus-delay-prediction/releases)
-do repositório, com somas de verificação.
+O conjunto de dados dos 30 dias (`percursos`, `chegadas`, `previsao_realizado`,
+a frota inteira por trecho, as camadas do GeoSampa e as métricas dos modelos)
+está na release
+[v2.0.0](https://github.com/mercuryVM/olhovivo-bus-delay-prediction/releases/tag/v2.0.0),
+com somas de verificação. A primeira semana, em formato anterior, continua na
+[v1.0.0](https://github.com/mercuryVM/olhovivo-bus-delay-prediction/releases/tag/v1.0.0).
 
 - [`docs/DICIONARIO-DE-DADOS.md`](docs/DICIONARIO-DE-DADOS.md) — descrição do
   conjunto de dados de saída: linhas, principais colunas e limitações.
