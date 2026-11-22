@@ -14,6 +14,7 @@ Nenhum treina ou ajusta modelo: a semana de teste (02 a 08/11) foi avaliada uma 
 | `atraso_por_data.py` | % de atrasadas por data, intervalos por bootstrap, 2º turno contra os outros domingos |
 | `zonas_sem_terminal.py` | Taxa por zona OD sem os trechos de terminal |
 | `zonas_robustez.py` | Zona da parada de origem, bootstrap da linha 5300, linha x zona |
+| `zonas_excesso.py` | Excesso de atraso por zona contra o esperado pela linha, hora e tipo de dia (bootstrap de dias, Bonferroni) e queda de velocidade |
 | `viagem_sintetica.py` | Viagens montadas com trechos de outras viagens (compensação entre trechos) |
 | `episodios_recorrencia.py` | Episódios ST-DBSCAN por zona e dia útil (fim de tarde) |
 | `episodios_acaso.py` | Ônibus por episódio e teste ao acaso da recorrência |

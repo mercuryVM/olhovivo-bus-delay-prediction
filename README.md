@@ -52,10 +52,13 @@ Nas 10 linhas, nos 30 dias:
 - **Onde:** o lugar pesa mais que a linha. As zonas da Pesquisa Origem-Destino
   vão de 1 em 7 a 1 em 3 passagens atrasadas; as linhas ficam todas perto de
   1 em 4. Na mesma linha 5300, 28 % na Praça João Mendes contra 18 % no Centro
-  Cultural.
+  Cultural. Descontando a linha, a hora e o tipo de dia dos ônibus de cada zona,
+  36 das 78 zonas ainda atrasam mais ou menos que o esperado (16 acima, 20 abaixo,
+  com correção para 78 testes); Brás, Mooca, Moema, Vila Curuçá e Ponte Rasa ficam
+  acima em todos os critérios de zona.
 - **Episódios (ST-DBSCAN):** 7.792 episódios; 17 zonas têm atraso agrupado em
-  15 ou mais dos 20 fins de tarde de dia útil, padrão que acompanha o volume de
-  ônibus e a hora (teste ao acaso).
+  15 ou mais dos 19 fins de tarde de dia útil com coleta, mas a repetição também
+  aparece com o atraso sorteado ao acaso: acompanha o volume de ônibus e a hora.
 - **2º turno (25/10):** a cidade rodou com 2 em cada 3 ônibus de um dia útil; nas
   10 linhas a frota foi a de um domingo comum, e mesmo assim das 12h às 15h foi o
   pior dos 7 domingos e feriados.
